@@ -17,10 +17,10 @@
 #define DATATYPE 0
 #include "marvin.hpp"
 
-std::string shelf_net_arch_filename = "/home/andyz/apc/toolbox/ros-packages/catkin_ws/src/marvin_convnet/models/competition/net.json";
-std::string tote_net_arch_filename = "/home/andyz/apc/toolbox/ros-packages/catkin_ws/src/marvin_convnet/models/competition/net.json";
-std::string shelf_net_weights_filename = "/home/andyz/apc/toolbox/ros-packages/catkin_ws/src/marvin_convnet/models/competition/weights_shelf.marvin";
-std::string tote_net_weights_filename = "/home/andyz/apc/toolbox/ros-packages/catkin_ws/src/marvin_convnet/models/competition/weights_tote.marvin";
+std::string shelf_net_arch_filename = "/home/yongqi/catkin_ws/src/marvin_convnet/models/competition/net.json";
+std::string tote_net_arch_filename = "/home/yongqi/catkin_ws/src/marvin_convnet/models/competition/net.json";
+std::string shelf_net_weights_filename = "/home/yongqi/catkin_ws/src/marvin_convnet/models/competition/weights_shelf.marvin";
+std::string tote_net_weights_filename = "/home/yongqi/catkin_ws/src/marvin_convnet/models/competition/weights_tote.marvin";
 
 // Service modes and names
 std::string service_name;
@@ -129,7 +129,6 @@ bool srv_detect(marvin_convnet::DetectObjects::Request  &req,
     std::ifstream file(read_directory + "/masks");
     if (file.fail())
       system(std::string("mkdir -p " + read_directory + "/masks").c_str());
-
     // Write segmentation response maps to 16-bit grayscale png image
     std::string result_filename = read_directory + "/masks/frame-" + frame_prefix.str() + "." + all_object_names[curr_object_idx] + ".mask.png";
     cv::Mat result_mat(frame_height, frame_width, CV_16UC1);

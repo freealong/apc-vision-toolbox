@@ -1,7 +1,10 @@
+#ifndef MARVIN_HPP
+#define MARVIN_HPP
+
 /*
  * ----------------------------------------------------------------------------
  * Marvin: A Minimalist GPU-only N-Dimensional ConvNets Framework
- * Copyright (C) 2015 Princeton Vision Group
+ * Copyright (C) 2016 AutoX, Inc.
  * ----------------------------------------------------------------------------
  */
 
@@ -56,6 +59,10 @@
     #define ComputeT_MIN DBL_MIN
 #endif
 
+#if CUDA_VERSION >= 8000
+#define CUBLAS_DATA_HALF CUDA_R_16F
+#endif
+
 //////////////////////////////////////////////////////////////////////////////////////////////////
 // Includes
 //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -78,10 +85,18 @@
 #include <thread>
 #include <chrono>
 #include <future>
+#include <cuda.h>
 #include <cublas_v2.h>
 #include <curand.h>
 #include <cudnn.h>
 #include <sys/time.h>
+
+#define USE_OPENCV 0
+
+#if USE_OPENCV
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#endif
 
 namespace marvin {
 
@@ -97,7 +112,7 @@ enum LRPolicy { LR_fixed, LR_step, LR_exp, LR_inv, LR_multistep, LR_poly, LR_sig
 enum SolverAlgorithm { SGD, AdaDelta, AdaGrad, Adam, NAG, RMSprop};
 enum Regularizer { L2, L1 };
 enum LRN { CrossChannel, DivisiveNormalization };
-enum ElementWiseOp { ElementWise_EQL, ElementWise_MUL, ElementWise_SUM, ElementWise_MAX };
+enum ElementWiseOp { ElementWise_EQL, ElementWise_MUL, ElementWise_SUM, ElementWise_MIN, ElementWise_MAX };
 
 
 ComputeT anyval;
@@ -120,9 +135,258 @@ void FatalError(const int lineNumber=0) {
     exit(EXIT_FAILURE);
 }
 
-void checkCUDA(const int lineNumber, cudaError_t status) {
-    if (status != cudaSuccess) {
-        std::cerr << "CUDA failure at LINE " << lineNumber << ": " << status << std::endl;
+void checkCUDA(const int lineNumber, cudaError_t error_code) {
+    if (error_code != cudaSuccess) {
+        std::cerr << "CUDA failure at LINE " << lineNumber << ": cudaError code " << error_code << ": ";
+
+        std::string msg;
+
+        switch(error_code){
+
+            case cudaSuccess: //0    
+                msg = "The API call returned with no errors. In the case of query calls, this can also mean that the operation being queried is complete (see ::cudaEventQuery() and ::cudaStreamQuery())."; break;
+
+            case cudaErrorMissingConfiguration: //1
+                msg = "The device function being invoked (usually via ::cudaLaunchKernel()) was not previously configured via the ::cudaConfigureCall() function."; break;
+
+            case cudaErrorMemoryAllocation: //2
+                msg = "The API call failed because it was unable to allocate enough memory to perform the requested operation."; break;
+              
+            case cudaErrorInitializationError: //3
+                msg = "The API call failed because the CUDA driver and runtime could not be initialized."; break;
+
+            case cudaErrorLaunchFailure: //4,
+                msg = "An exception occurred on the device while executing a kernel. Common causes include dereferencing an invalid device pointer and accessing out of bounds shared memory. The device cannot be used until ::cudaThreadExit() is called. All existing device memory allocations are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+              
+            case cudaErrorPriorLaunchFailure  : //5,
+                msg = "This indicated that a previous kernel launch failed. This was previously used for device emulation of kernel launches. [deprecated] This error return is deprecated as of CUDA 3.1. Device emulation mode was removed with the CUDA 3.1 release."; break;
+
+            case cudaErrorLaunchTimeout: //6,
+                msg = "This indicates that the device kernel took too long to execute. This can only occur if timeouts are enabled - see the device property \ref ::cudaDeviceProp::kernelExecTimeoutEnabled kernelExecTimeoutEnabled for more information. The device cannot be used until ::cudaThreadExit() is called. All existing device memory allocations are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+              
+            case cudaErrorLaunchOutOfResources: //7,
+                msg = "This indicates that a launch did not occur because it did not have appropriate resources. Although this error is similar to ::cudaErrorInvalidConfiguration, this error usually indicates that the user has attempted to pass too many arguments to the device kernel, or the kernel launch specifies too many threads for the kernel's register count."; break;
+              
+            case cudaErrorInvalidDeviceFunction    : //  8,
+                msg = "The requested device function does not exist or is not compiled for the proper device architecture."; break;
+
+            case cudaErrorInvalidConfiguration: //9, 
+                msg = "This indicates that a kernel launch is requesting resources that can never be satisfied by the current device. Requesting more shared memory per block than the device supports will trigger this error, as will requesting too many threads or blocks. See ::cudaDeviceProp for more device limitations."; break;
+
+            case cudaErrorInvalidDevice            : // 10,
+                msg = "This indicates that the device ordinal supplied by the user does not correspond to a valid CUDA device."; break;
+
+            case cudaErrorInvalidValue             : // 11,
+                msg = "This indicates that one or more of the parameters passed to the API call is not within an acceptable range of values."; break;
+
+            case cudaErrorInvalidPitchValue        : // 12,
+                msg = "This indicates that one or more of the pitch-related parameters passed to the API call is not within the acceptable range for pitch."; break;
+
+            case cudaErrorInvalidSymbol            : // 13,
+                msg = "This indicates that the symbol name/identifier passed to the API call is not a valid name or identifier."; break;
+
+            case cudaErrorMapBufferObjectFailed    : // 14,
+                msg = "This indicates that the buffer object could not be mapped."; break;
+
+            case cudaErrorUnmapBufferObjectFailed  : // 15,
+                msg = "This indicates that the buffer object could not be unmapped."; break;  
+
+            case cudaErrorInvalidHostPointer       : // 16,
+                msg = "This indicates that at least one host pointer passed to the API call is not a valid host pointer."; break;
+
+            case cudaErrorInvalidDevicePointer     : // 17,
+                msg = "This indicates that at least one device pointer passed to the API call is not a valid device pointer."; break;
+              
+            case cudaErrorInvalidTexture           : // 18,
+                msg = "This indicates that the texture passed to the API call is not a valid texture."; break;  
+
+            case cudaErrorInvalidTextureBinding    : // 19,
+                msg = "This indicates that the texture binding is not valid. This occurs if you call ::cudaGetTextureAlignmentOffset() with an unbound texture."; break;
+
+            case cudaErrorInvalidChannelDescriptor : // 20,
+                msg = "This indicates that the channel descriptor passed to the API call is not valid. This occurs if the format is not one of the formats specified by ::cudaChannelFormatKind, or if one of the dimensions is invalid."; break;
+
+            case cudaErrorInvalidMemcpyDirection   : // 21,
+                msg = "This indicates that the direction of the memcpy passed to the API call is not one of the types specified by ::cudaMemcpyKind."; break;
+
+            case cudaErrorAddressOfConstant        : // 22,
+                msg = "This indicated that the user has taken the address of a constant variable, which was forbidden up until the CUDA 3.1 release. [deprecated] This error return is deprecated as of CUDA 3.1. Variables in constant memory may now have their address taken by the runtime via ::cudaGetSymbolAddress()."; break;
+
+            case cudaErrorTextureFetchFailed       : // 23,
+                msg = "This indicated that a texture fetch was not able to be performed. This was previously used for device emulation of texture operations. [deprecated] This error return is deprecated as of CUDA 3.1. Device emulation mode was removed with the CUDA 3.1 release."; break;
+
+            case cudaErrorTextureNotBound          : // 24,
+                msg = "This indicated that a texture was not bound for access. This was previously used for device emulation of texture operations. [deprecated] This error return is deprecated as of CUDA 3.1. Device emulation mode was removed with the CUDA 3.1 release."; break;
+
+            case cudaErrorSynchronizationError     : // 25,
+                msg = "This indicated that a synchronization operation had failed. This was previously used for some device emulation functions. [deprecated] This error return is deprecated as of CUDA 3.1. Device emulation mode was removed with the CUDA 3.1 release."; break;
+
+            case cudaErrorInvalidFilterSetting     : // 26, 
+                msg = "This indicates that a non-float texture was being accessed with linear filtering. This is not supported by CUDA."; break;
+
+            case cudaErrorInvalidNormSetting       : // 27, 
+                msg = "This indicates that an attempt was made to read a non-float texture as a normalized float. This is not supported by CUDA."; break;
+
+            case cudaErrorMixedDeviceExecution     : // 28,
+                msg = "Mixing of device and device emulation code was not allowed. [deprecated] This error return is deprecated as of CUDA 3.1. Device emulation mode was removed with the CUDA 3.1 release."; break;
+
+            case cudaErrorCudartUnloading          : // 29,
+                msg = "This indicates that a CUDA Runtime API call cannot be executed because it is being called during process shut down, at a point in time after CUDA driver has been unloaded."; break;
+
+            case cudaErrorUnknown                  : // 30,
+                msg = "This indicates that an unknown internal error has occurred."; break;
+
+            case cudaErrorNotYetImplemented        : // 31,
+                msg = "This indicates that the API call is not yet implemented. Production releases of CUDA will never return this error. [deprecated] This error return is deprecated as of CUDA 4.1."; break;
+
+            case cudaErrorMemoryValueTooLarge      : // 32,
+                msg = "his indicated that an emulated device pointer exceeded the 32-bit address range. [deprecated] This error return is deprecated as of CUDA 3.1. Device emulation mode was removed with the CUDA 3.1 release."; break;
+
+            case cudaErrorInvalidResourceHandle    : // 33,
+                msg = "This indicates that a resource handle passed to the API call was not valid. Resource handles are opaque types like ::cudaStream_t and ::cudaEvent_t."; break;
+
+            case cudaErrorNotReady                 : // 34,
+                msg = "This indicates that asynchronous operations issued previously have not completed yet. This result is not actually an error, but must be indicated differently than ::cudaSuccess (which indicates completion). Calls that may return this value include ::cudaEventQuery() and ::cudaStreamQuery()."; break;
+
+            case cudaErrorInsufficientDriver       : // 35,
+                msg = "This indicates that the installed NVIDIA CUDA driver is older than the CUDA runtime library. This is not a supported configuration. Users should install an updated NVIDIA display driver to allow the application to run."; break;
+
+            case cudaErrorSetOnActiveProcess       : // 36,
+                msg = "This indicates that the user has called ::cudaSetValidDevices(), ::cudaSetDeviceFlags(), ::cudaD3D9SetDirect3DDevice(), ::cudaD3D10SetDirect3DDevice, ::cudaD3D11SetDirect3DDevice(), or ::cudaVDPAUSetVDPAUDevice() after initializing the CUDA runtime by calling non-device management operations (allocating memory and launching kernels are examples of non-device management operations). This error can also be returned if using runtime/driver interoperability and there is an existing ::CUcontext active on the host thread."; break;
+
+            case cudaErrorInvalidSurface           : // 37,
+                msg = "This indicates that the surface passed to the API call is not a valid surface."; break;
+
+            case cudaErrorNoDevice                 : // 38,
+                msg = "This indicates that no CUDA-capable devices were detected by the installed CUDA driver."; break;
+
+            case cudaErrorECCUncorrectable         : // 39,
+                msg = "This indicates that an uncorrectable ECC error was detected during execution."; break;
+
+            case cudaErrorSharedObjectSymbolNotFound   : // 40,
+                msg = "This indicates that a link to a shared object failed to resolve."; break;
+
+            case cudaErrorSharedObjectInitFailed   : // 41,
+                msg = "This indicates that initialization of a shared object failed."; break;
+
+            case cudaErrorUnsupportedLimit         : // 42,
+                msg = "This indicates that the ::cudaLimit passed to the API call is not supported by the active device."; break;
+
+            case cudaErrorDuplicateVariableName    : // 43,
+                msg = "This indicates that multiple global or constant variables (across separate CUDA source files in the application) share the same string name."; break;
+
+            case cudaErrorDuplicateTextureName     : // 44,
+                msg = "This indicates that multiple textures (across separate CUDA source files in the application) share the same string name."; break;
+              
+            case cudaErrorDuplicateSurfaceName     : // 45,
+                msg = "This indicates that multiple surfaces (across separate CUDA source files in the application) share the same string name."; break;
+
+            case cudaErrorDevicesUnavailable       : // 46,
+                msg = "This indicates that all CUDA devices are busy or unavailable at the current time. Devices are often busy/unavailable due to use of ::cudaComputeModeExclusive, ::cudaComputeModeProhibited or when long running CUDA kernels have filled up the GPU and are blocking new work from starting. They can also be unavailable due to memory constraints on a device that already has active CUDA work being performed."; break;
+
+            case cudaErrorInvalidKernelImage       : // 47,
+                msg = "This indicates that the device kernel image is invalid."; break;
+              
+            case cudaErrorNoKernelImageForDevice   : // 48,
+                msg = "there is no kernel image available that is suitable for the device. This can occur when a user specifies code generation options for a particular CUDA source file that do not include the corresponding device configuration."; break;
+              
+            case cudaErrorIncompatibleDriverContext: // 49,
+                msg = "the current context is not compatible with this the CUDA Runtime. This can only occur if you are using CUDA Runtime/Driver interoperability and have created an existing Driver context using the driver API. The Driver context may be incompatible either because the Driver context was created using an older version of the API, because the Runtime API call expects a primary driver context and the Driver context is not primary, or because the Driver context has been destroyed. Please see ref CUDART_DRIVER Interactions with the CUDA Driver API for more information."; break;
+                  
+            case cudaErrorPeerAccessAlreadyEnabled : // 50,
+                msg = "a call to ::cudaDeviceEnablePeerAccess() is trying to re-enable peer addressing on from a context which has already had peer addressing enabled."; break;
+
+            case cudaErrorPeerAccessNotEnabled     : // 51,
+                msg = "::cudaDeviceDisablePeerAccess() is trying to disable peer addressing which has not been enabled yet via ::cudaDeviceEnablePeerAccess()."; break;
+                
+            case cudaErrorDeviceAlreadyInUse       : // 54,
+                msg = "a call tried to access an exclusive-thread device that is already in use by a different thread."; break;
+
+            case cudaErrorProfilerDisabled         : // 55,
+                msg = "This indicates profiler is not initialized for this run. This can happen when the application is running with external profiling tools like visual profiler."; break;
+
+            case cudaErrorProfilerNotInitialized   : // 56,
+                msg = "[deprecated] This error return is deprecated as of CUDA 5.0. It is no longer an error to attempt to enable/disable the profiling via ::cudaProfilerStart or ::cudaProfilerStop without initialization."; break;
+
+            case cudaErrorProfilerAlreadyStarted   : // 57,
+                msg = "[deprecated] This error return is deprecated as of CUDA 5.0. It is no longer an error to call cudaProfilerStart() when profiling is already enabled."; break;
+
+            case cudaErrorProfilerAlreadyStopped   : //58,
+                msg = "[deprecated] This error return is deprecated as of CUDA 5.0. It is no longer an error to call cudaProfilerStop() when profiling is already disabled."; break;
+
+            case cudaErrorAssert                    : //59,
+                msg = "An assert triggered in device code during kernel execution. The device cannot be used again until ::cudaThreadExit() is called. All existing allocations are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+              
+            case cudaErrorTooManyPeers             : // 60,
+                msg = "the hardware resources required to enable peer access have been exhausted for one or more of the devices passed to ::cudaEnablePeerAccess()."; break;
+              
+            case cudaErrorHostMemoryAlreadyRegistered: // 61,
+                msg = "the memory range passed to ::cudaHostRegister() has already been registered."; break;
+                    
+            case cudaErrorHostMemoryNotRegistered  : // 62,
+                msg = "the pointer passed to ::cudaHostUnregister() does not correspond to any currently registered memory region."; break;
+
+            case cudaErrorOperatingSystem          : // 63,
+                msg = "an OS call failed."; break;
+
+            case cudaErrorPeerAccessUnsupported    : // 64,
+                msg = "P2P access is not supported across the given devices."; break;
+
+            case cudaErrorLaunchMaxDepthExceeded   : // 65,
+                msg = "a device runtime grid launch did not occur because the depth of the child grid would exceed the maximum supported number of nested grid launches."; break;
+
+            case cudaErrorLaunchFileScopedTex      : // 66,
+                msg = "a grid launch did not occur because the kernel uses file-scoped textures which are unsupported by the device runtime. Kernels launched via the device runtime only support textures created with the Texture Object API's."; break;
+
+            case cudaErrorLaunchFileScopedSurf     : // 67,
+                msg = "a grid launch did not occur because the kernel uses file-scoped surfaces which are unsupported by the device runtime. Kernels launched via the device runtime only support surfaces created with the Surface Object API's."; break;
+
+            case cudaErrorSyncDepthExceeded        : // 68,
+                msg = "a call to ::cudaDeviceSynchronize made from the device runtime failed because the call was made at grid depth greater than than either the default (2 levels of grids) or user specified device limit ::cudaLimitDevRuntimeSyncDepth. To be able to synchronize on launched grids at a greater depth successfully, the maximum nested depth at which ::cudaDeviceSynchronize will be called must be specified with the ::cudaLimitDevRuntimeSyncDepth limit to the ::cudaDeviceSetLimit api before the host-side launch of a kernel using the device runtime. Keep in mind that additional levels of sync depth require the runtime to reserve large amounts of device memory that cannot be used for user allocations."; break;
+
+            case cudaErrorLaunchPendingCountExceeded : //     69,
+                msg = "a device runtime grid launch failed because the launch would exceed the limit ::cudaLimitDevRuntimePendingLaunchCount. For this launch to proceed successfully, ::cudaDeviceSetLimit must be called to set the ::cudaLimitDevRuntimePendingLaunchCount to be higher than the upper bound of outstanding launches that can be issued to the device runtime. Keep in mind that raising the limit of pending device runtime launches will require the runtime to reserve device memory that cannot be used for user allocations."; break;    
+
+            case cudaErrorNotPermitted             : // 70,
+                msg = "This error indicates the attempted operation is not permitted."; break;
+
+            case cudaErrorNotSupported             : // 71,
+                msg = "This error indicates the attempted operation is not supported on the current system or device."; break;
+
+            case cudaErrorHardwareStackError       : // 72,
+                msg = "Device encountered an error in the call stack during kernel execution, possibly due to stack corruption or exceeding the stack size limit. The context cannot be used, so it must be destroyed (and a new one should be created). All existing device memory allocations from this context are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+
+            case cudaErrorIllegalInstruction       : // 73,
+                msg = "The device encountered an illegal instruction during kernel execution The context cannot be used, so it must be destroyed (and a new one should be created). All existing device memory allocations from this context are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+
+            case cudaErrorMisalignedAddress        : // 74,
+                msg = "The device encountered a load or store instruction on a memory address which is not aligned. The context cannot be used, so it must be destroyed (and a new one should be created). All existing device memory allocations from this context are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+
+            case cudaErrorInvalidAddressSpace      : // 75,
+                msg = "While executing a kernel, the device encountered an instruction which can only operate on memory locations in certain address spaces (global, shared, or local), but was supplied a memory address not belonging to an allowed address space. The context cannot be used, so it must be destroyed (and a new one should be created). All existing device memory allocations from this context are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+
+            case cudaErrorInvalidPc                : // 76,
+                msg = "The device encountered an invalid program counter. The context cannot be used, so it must be destroyed (and a new one should be created). All existing device memory allocations from this context are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+
+            case cudaErrorIllegalAddress           : // 77,
+                msg = "The device encountered a load or store instruction on an invalid memory address. The context cannot be used, so it must be destroyed (and a new one should be created). All existing device memory allocations from this context are invalid and must be reconstructed if the program is to continue using CUDA."; break;
+
+            case cudaErrorInvalidPtx               : // 78,
+                msg = "A PTX compilation failed. The runtime may fall back to compiling PTX if an application does not contain a suitable binary for the current device."; break;
+
+            case cudaErrorInvalidGraphicsContext   : // 79,
+                msg = "This indicates an error with the OpenGL or DirectX context."; break;
+
+            case cudaErrorStartupFailure   : //  0x7f,
+                msg = "This indicates an internal startup failure in the CUDA runtime."; break;
+
+            case cudaErrorApiFailureBase   : //  10000
+                msg = "Any unhandled CUDA driver error is added to this value and returned via the runtime. Production releases of CUDA should not return such errors. [deprecated] This error return is deprecated as of CUDA 4.1."; break;
+
+        }
+
+        std::cerr << msg << std::endl;
+
         FatalError();
     }
 }
@@ -472,6 +736,7 @@ public:
         else if (0 == this->member[name]->returnString().compare("ElementWise_EQL"))        variable = ElementWise_EQL;
         else if (0 == this->member[name]->returnString().compare("ElementWise_MUL"))        variable = ElementWise_MUL;
         else if (0 == this->member[name]->returnString().compare("ElementWise_SUM"))        variable = ElementWise_SUM;
+        else if (0 == this->member[name]->returnString().compare("ElementWise_MIN"))        variable = ElementWise_MIN;
         else if (0 == this->member[name]->returnString().compare("ElementWise_MAX"))        variable = ElementWise_MAX;
         else{ std::cout<<"Unsupported "<<name<<" = "<<this->member[name]->returnString()<<std::endl; FatalError(__LINE__); }
     };
@@ -584,6 +849,7 @@ public:
         else if (0 == this->member[name]->returnString().compare("fft"))                    variable = CUDNN_CONVOLUTION_FWD_ALGO_FFT;
         else if (0 == this->member[name]->returnString().compare("fft_tiling"))             variable = CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING;
         else if (0 == this->member[name]->returnString().compare("winograd"))               variable = CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD;
+        else if (0 == this->member[name]->returnString().compare("winograd_nonfused"))      variable = CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED;
         else{ std::cout<<"Unsupported "<<name<<" = "<<this->member[name]->returnString()<<std::endl; FatalError(__LINE__); }
     };
 
@@ -594,6 +860,7 @@ public:
         else if (0 == this->member[name]->returnString().compare("fft"))                    variable = CUDNN_CONVOLUTION_BWD_DATA_ALGO_FFT;
         else if (0 == this->member[name]->returnString().compare("fft_tiling"))             variable = CUDNN_CONVOLUTION_BWD_DATA_ALGO_FFT_TILING;
         else if (0 == this->member[name]->returnString().compare("winograd"))               variable = CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD;
+        else if (0 == this->member[name]->returnString().compare("winograd_nonfused"))      variable = CUDNN_CONVOLUTION_BWD_DATA_ALGO_WINOGRAD_NONFUSED;
         else{ std::cout<<"Unsupported "<<name<<" = "<<this->member[name]->returnString()<<std::endl; FatalError(__LINE__); }
     };
 
@@ -603,6 +870,7 @@ public:
         else if (0 == this->member[name]->returnString().compare("1"))                      variable = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_1;
         else if (0 == this->member[name]->returnString().compare("fft"))                    variable = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_FFT;
         else if (0 == this->member[name]->returnString().compare("3"))                      variable = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_3;
+        else if (0 == this->member[name]->returnString().compare("winograd_nonfused"))      variable = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_WINOGRAD_NONFUSED;
         else{ std::cout<<"Unsupported "<<name<<" = "<<this->member[name]->returnString()<<std::endl; FatalError(__LINE__); }
     };
 
@@ -976,36 +1244,6 @@ size_t checkNaN(StorageT* dataGPU, size_t n){
     if (countNaN>0){
         std::cout<<"        checkNaN result: "<<countNaN<<" out of "<<n<<" ("<< 100*ComputeT(countNaN)/n<< "\045) values are NaN, "<<n-countNaN<<" are not NaN."; //<<std::endl;
     }
-
-    /*
-
-    std::cout<<std::endl;
-    for (size_t i=0;i<10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    std::cout<<std::endl;
-
-    
-
-    std::cout<<std::endl;
-    for (size_t i=0;i<10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    for (size_t i=640+0;i<640+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    for (size_t i=640*2+0;i<640*2+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-
-    std::cout<< std::endl;
-
-    for (size_t i=480*640+0;i<480*640+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    for (size_t i=480*640+640+0;i<480*640+640+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    for (size_t i=480*640+640*2+0;i<480*640+640*2+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-
-    std::cout<< std::endl;
-
-    for (size_t i=480*640*2+0;i<480*640*2+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    for (size_t i=480*640*2+640+0;i<480*640*2+640+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-    for (size_t i=480*640*2+640*2+0;i<480*640*2+640*2+10;++i) std::cout<< CPUStorage2ComputeT(CPUmem[i])<<" ";  std::cout<< std::endl;
-
-    std::cout<< std::endl;
-
-    */
-
     delete [] CPUmem;
     return countNaN;
 }
@@ -1334,6 +1572,21 @@ __global__ void LossGrad_Contrastive(
 }
 
 
+__global__ void Kernel_OpenCV_BGR_image_to_Marvin(size_t CUDA_NUM_LOOPS, size_t N, size_t channels, size_t height, size_t width, const uint8_t* pIn, uint8_t* pOut) {
+    const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x)); if (idxBase >= N) return;
+    for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
+        size_t chn = 2 - (idx % 3);
+        size_t col = (idx/3)%width;
+        size_t row = (idx/(3*width));
+        pOut[(chn*height+row)*width+col] = pIn[idx];
+    }
+}
+
+void OpenCV_BGR_image_to_Marvin(size_t channels, size_t height, size_t width, const uint8_t* pIn, uint8_t* pOut){
+    size_t N = channels * height * width;
+    Kernel_OpenCV_BGR_image_to_Marvin<<<CUDA_GET_BLOCKS(N), CUDA_NUM_THREADS >>>(CUDA_GET_LOOPS(N), N, channels, height, width, pIn, pOut);
+}
+
 __global__ void Kernel_convert_to_StorageT_subtract(size_t CUDA_NUM_LOOPS, size_t N, size_t sizeofitem, const half* pIn, const StorageT* pMean, StorageT* pOut) {
     const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x)); if (idxBase >= N) return;
     if (pMean==NULL) for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ) pOut[idx] = GPUCompute2StorageT( ComputeT(__half2float(pIn[idx])) );
@@ -1432,22 +1685,6 @@ void GPU_set_ones(size_t N, StorageT* GPUdst){
 
 void GPU_set_zeros(size_t N, StorageT* GPUdst){
     GPU_set_value(N, GPUdst, CPUCompute2StorageT(0));
-}
-
-__global__ void Kernel_dropout_forward(size_t CUDA_NUM_LOOPS, size_t N, StorageT* GPUdst, const unsigned int* GPUmask, const StorageT* GPUsrc, unsigned int threshold, ComputeT scale){
-    const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x));
-    if (idxBase >= N) return;
-    for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
-        GPUdst[idx] = GPUCompute2StorageT( (GPUmask[idx]>threshold) * scale * GPUStorage2ComputeT(GPUsrc[idx]));
-    }
-}
-
-__global__ void Kernel_dropout_backward(size_t CUDA_NUM_LOOPS, size_t N, StorageT* GPUdst, const unsigned int* GPUmask, const StorageT* GPUsrc, unsigned int threshold, ComputeT scale){
-    const size_t idxBase = size_t(CUDA_NUM_LOOPS) * (size_t(CUDA_NUM_THREADS) * size_t(blockIdx.x) + size_t(threadIdx.x));
-    if (idxBase >= N) return;
-    for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
-        GPUdst[idx] = GPUCompute2StorageT( ((GPUmask[idx]>threshold) * scale * GPUStorage2ComputeT(GPUsrc[idx])) + GPUStorage2ComputeT(GPUdst[idx]) );
-    }
 }
 
 __global__ void Kernel_elementwise_multiplication(size_t CUDA_NUM_LOOPS, size_t N, StorageT* GPUdst, const StorageT* GPUsrcA, const StorageT* GPUsrcB){
@@ -1972,7 +2209,6 @@ __global__ void Kernel_update_AdaDeltaL1(size_t CUDA_NUM_LOOPS, size_t N, int nN
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         size_t h2_idx = N*(nNets+2)+idx;
@@ -1998,7 +2234,6 @@ __global__ void Kernel_update_AdaDeltaL2(size_t CUDA_NUM_LOOPS, size_t N, int nN
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         size_t h2_idx = N*(nNets+2)+idx;
@@ -2056,7 +2291,6 @@ __global__ void Kernel_update_AdamL1(size_t CUDA_NUM_LOOPS, size_t N, int nNets,
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         size_t h2_idx = N*(nNets+2)+idx;
@@ -2079,7 +2313,6 @@ __global__ void Kernel_update_AdamL2(size_t CUDA_NUM_LOOPS, size_t N, int nNets,
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         size_t h2_idx = N*(nNets+2)+idx;
@@ -2099,7 +2332,6 @@ __global__ void Kernel_update_NAGL1(size_t CUDA_NUM_LOOPS, size_t N, int nNets, 
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         ComputeT g;
@@ -2119,7 +2351,6 @@ __global__ void Kernel_update_NAGL2(size_t CUDA_NUM_LOOPS, size_t N, int nNets, 
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         ComputeT g  = decay * w;     // L2 regularization
@@ -2136,7 +2367,6 @@ __global__ void Kernel_update_RMSpropL1(size_t CUDA_NUM_LOOPS, size_t N, int nNe
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         ComputeT g;
@@ -2155,7 +2385,6 @@ __global__ void Kernel_update_RMSpropL2(size_t CUDA_NUM_LOOPS, size_t N, int nNe
     if (idxBase >= N) return;
     for (size_t idx = idxBase; idx < min(N,idxBase+CUDA_NUM_LOOPS); ++idx ){
         ComputeT w  = GPUStorage2ComputeT(weights[idx]);
-        //ComputeT u  = GPUStorage2ComputeT(gradients[idx]);
         size_t h_idx = N*(nNets+1)+idx;
         ComputeT h  = GPUStorage2ComputeT(gradients[h_idx]);
         ComputeT g  = decay * w;     // L2 regularization
@@ -2268,14 +2497,12 @@ cublasStatus_t Hasum(cublasHandle_t handle, int n, const half *x, int incx, floa
     return CUBLAS_STATUS_SUCCESS;
 }
 
-#if CUDA_VERSION >= 8000
-    #define CUDA_DATA_HALF CUDA_R_16F
-#else
-    #define CUDA_DATA_HALF CUBLAS_DATA_HALF
-#endif
-
 cublasStatus_t Hgemm(cublasHandle_t handle, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const float *alpha, const half *A, int lda, const half *B, int ldb, const float *beta,  half *C, int ldc){
-    return cublasSgemmEx(handle, transa, transb, m, n, k, alpha, A, CUDA_DATA_HALF, lda, B, CUDA_DATA_HALF, ldb, beta, C, CUDA_DATA_HALF, ldc);
+#if CUDA_VERSION >= 8000
+    return cublasSgemmEx(handle, transa, transb, m, n, k, alpha, A, CUDA_R_16F, lda, B, CUDA_R_16F, ldb, beta, C, CUDA_R_16F, ldc);
+#else
+    return cublasSgemmEx(handle, transa, transb, m, n, k, alpha, A, CUBLAS_DATA_HALF, lda, B, CUBLAS_DATA_HALF, ldb, beta, C, CUBLAS_DATA_HALF, ldc);
+#endif
 }
 
 
@@ -2585,6 +2812,8 @@ public:
     Tensor(FILE* fp): CPUmem(NULL){ read(fp); };
 
     Tensor(std::vector<int> dim_): dim(dim_){ CPUmem = new T [numel()]; };
+
+    Tensor(std::vector<int> dim_, T* ptr_data): dim(dim_){ CPUmem = ptr_data; };
 
     Tensor(std::vector<int> dim_, T initValue): dim(dim_){
         int n = numel();
@@ -3273,6 +3502,43 @@ public:
 };
 
 
+class ConstantLayer: public DataLayer {
+    std::vector<ComputeT> data;
+public:
+    ConstantLayer(std::string name_): DataLayer(name_){
+        train_me = false;
+    };
+    ConstantLayer(JSON* json){
+        SetOrDie(json, name)
+        SetValue(json, phase,       TrainingTesting)
+        SetOrDie(json, data)
+        train_me = false;
+    };
+    ~ConstantLayer(){ };
+    int numofitems(){ return 1; };
+    void shuffle(){};
+    void forward(Phase phase_){ ++epoch; };
+    size_t Malloc(Phase phase_){
+        std::cout<< (train_me? "* " : "  ");
+        std::cout<<name<<std::endl;
+        if (!in.empty()){   std::cout<<"ConstantLayer shouldn't have any in's"<<std::endl; FatalError(__LINE__); }
+        if (out.size()!=1){   std::cout<<"ConstantLayer should have one out"<<std::endl; FatalError(__LINE__); }
+        size_t memoryBytes = 0;
+        std::vector<int> dim;
+        dim.push_back(data.size());
+        dim.push_back(1);
+        dim.push_back(1);
+        out[0]->need_diff = false;
+        memoryBytes += out[0]->Malloc(dim);
+        StorageT* dataStorageT = new StorageT[data.size()];
+        for (size_t i=0; i<data.size(); ++i) dataStorageT[i] = CPUCompute2StorageT(data[i]); 
+        checkCUDA(__LINE__, cudaMemcpy(out[0]->dataGPU, dataStorageT, data.size() * sizeofStorageT, cudaMemcpyHostToDevice) );
+        delete [] dataStorageT;
+        return memoryBytes;
+    };
+};
+
+
 class TensorLayer: public DataLayer {
     StorageT* tensorGPU;
 public:
@@ -3559,9 +3825,199 @@ class MemoryDataLayer : public DataLayer {
 };
 
 
+#if USE_OPENCV
+class ImageDataLayer : public DataLayer {
+    StorageT* dataCPU;
+    StorageT* dataGPU;
+    StorageT* labelCPU;
+    StorageT* labelGPU;
+
+    Tensor<StorageT>* labelTensor;
+
+    std::vector<size_t> ordering;
+    std::vector<std::string> img_fname;
+
+    std::future<void> lock;
+    int epoch_prefetch;
+
+public:
+    std::string file_list;
+    std::string file_label;
+    std::vector<int> image_output;
+    int batch_size;
+    ComputeT mean_value;
+
+    ImageDataLayer(JSON* json){
+        SetOrDie(json, name)
+        SetValue(json, phase,       Training)
+        SetOrDie(json, image_output)
+        SetOrDie(json, file_list)
+        SetOrDie(json, file_label)
+        SetOrDie(json, mean_value)
+        SetValue(json, batch_size,  64)
+        SetValue(json, random,      true)
+        init();
+    };
+
+    void shuffle(){
+        if (!random) return;
+        if (phase!=Testing){
+            ordering = randperm(img_fname.size(), rng);
+        }
+    };     
+
+    int numofitems(){
+        return img_fname.size();
+    };
+    void init(){
+        train_me = false;
+        std::cout<<"ImageDataLayer "<<name<<" loading data: ";
+
+        std::ifstream fin(file_list);
+        while (!fin.eof()){
+            std::string fname;
+            fin>>fname;
+            if (fin.eof()) break;
+            img_fname.push_back(fname);
+        };
+        fin.close();
+        std::cout<<"# of images = "<<img_fname.size()<<std::endl;
+
+
+        labelTensor = new Tensor<StorageT>(file_label);
+        labelTensor->print(veci(0));
+
+        ordering.resize(numofitems());
+        for (int i=0;i<numofitems();++i) ordering[i]=i;
+        if (phase!=Testing){
+            shuffle();
+        }
+    }
+
+    ImageDataLayer(std::string name_, Phase phase_, int batch_size_): DataLayer(name_), batch_size(batch_size_){
+        phase = phase_;
+
+        dataCPU  =NULL;
+        labelCPU =NULL;
+        dataGPU  =NULL;
+        labelGPU =NULL;
+
+        init();
+    };
+
+    ~ImageDataLayer(){
+        if (labelTensor!=NULL) delete labelTensor;
+        if (dataCPU!=NULL)  delete [] dataCPU;
+        if (labelCPU!=NULL) delete [] labelCPU;
+        if (dataGPU!=NULL)  checkCUDA(__LINE__, cudaFree(dataGPU));
+        if (labelGPU!=NULL) checkCUDA(__LINE__, cudaFree(labelGPU));
+    };
+
+    void prefetch(){
+
+        size_t perImageSize = 3*image_output[0]*image_output[1];
+        cv::Size resize_size(image_output[0],image_output[1]);
+
+        for (size_t i=0;i<batch_size;++i){
+            // choose image
+            int image_i = ordering[counter];
+
+            // read image
+            cv::Mat image_RGB = cv::imread(img_fname[image_i],CV_LOAD_IMAGE_UNCHANGED);
+            cv::Mat image_RGB_resize;
+
+            // resize image
+            cv::resize(image_RGB,image_RGB_resize,resize_size);
+
+            // convert image and subtract mean
+            StorageT* pImage = dataCPU+i*perImageSize;
+            StorageT* pImageEnd   = pImage+perImageSize;
+            uchar* pPixel = image_RGB_resize.data;
+            while(pImage!=pImageEnd){
+                *pImage = CPUCompute2StorageT(ComputeT(*pPixel)- mean_value);
+                ++pImage; ++pPixel;
+            }
+
+            // copy label
+            memcpy(labelCPU+i*labelTensor->sizeofitem(), labelTensor->CPUmem+image_i*labelTensor->sizeofitem(), labelTensor->sizeofitem()*sizeofStorageT );
+            
+            counter++;
+            if (counter>= ordering.size()){
+                if (phase!=Testing) shuffle();
+                counter = 0;
+                ++epoch_prefetch;
+            }
+        }
+
+        // copy from CPU to GPU
+        checkCUDA(__LINE__, cudaMemcpy(dataGPU, dataCPU, batch_size*perImageSize*sizeofStorageT, cudaMemcpyHostToDevice) );
+        checkCUDA(__LINE__, cudaMemcpy(labelGPU, labelCPU, batch_size*labelTensor->sizeofitem()*sizeofStorageT, cudaMemcpyHostToDevice) );
+    };
+
+
+    size_t Malloc(Phase phase_){
+        if (phase == Training && phase_==Testing) return 0;
+        
+        if (!in.empty()){   std::cout<<"ImageDataLayer shouldn't have any in's"<<std::endl; FatalError(__LINE__); }
+        if (out.empty()){   std::cout<<"ImageDataLayer should have some out's"<<std::endl; FatalError(__LINE__); }
+        if (out.size()!=2){  std::cout<<"ImageDataLayer: # of out's should be 2"<<std::endl; FatalError(__LINE__); }
+
+        size_t memoryBytes = 0;
+        std::cout<< (train_me? "* " : "  ");
+        std::cout<<name<<std::endl;
+
+        dataCPU  = new StorageT[batch_size*3*image_output[0]*image_output[1]];
+        checkCUDA(__LINE__, cudaMalloc(&dataGPU, batch_size*3*image_output[0]*image_output[1]*sizeofStorageT) );
+        memoryBytes += batch_size*3*image_output[0]*image_output[1]*sizeofStorageT;
+
+        labelCPU = new StorageT[batch_size* labelTensor->sizeofitem() ];
+        checkCUDA(__LINE__, cudaMalloc(&labelGPU, batch_size* labelTensor->sizeofitem()*sizeofStorageT) );
+        memoryBytes += batch_size* labelTensor->sizeofitem()*sizeofStorageT;
+
+        out[0]->need_diff = false;
+        std::vector<int> data_dim;
+        data_dim.push_back(batch_size);
+        data_dim.push_back(3);
+        data_dim.push_back(image_output[0]);
+        data_dim.push_back(image_output[1]);
+        out[0]->receptive_field.resize(data_dim.size()-2);  fill_n(out[0]->receptive_field.begin(), data_dim.size()-2,1);
+        out[0]->receptive_gap.resize(data_dim.size()-2);    fill_n(out[0]->receptive_gap.begin(),   data_dim.size()-2,1);
+        out[0]->receptive_offset.resize(data_dim.size()-2); fill_n(out[0]->receptive_offset.begin(),data_dim.size()-2,0);
+        memoryBytes += out[0]->Malloc(data_dim);
+
+        out[1]->need_diff = false;
+        std::vector<int> label_dim;
+        label_dim.push_back(batch_size);
+        label_dim.push_back(labelTensor->dim[1]);
+        label_dim.push_back(labelTensor->dim[2]);
+        label_dim.push_back(labelTensor->dim[3]);
+        out[1]->receptive_field.resize(label_dim.size()-2);  fill_n(out[1]->receptive_field.begin(), label_dim.size()-2,1);
+        out[1]->receptive_gap.resize(label_dim.size()-2);    fill_n(out[1]->receptive_gap.begin(),   label_dim.size()-2,1);
+        out[1]->receptive_offset.resize(label_dim.size()-2); fill_n(out[1]->receptive_offset.begin(),label_dim.size()-2,0);
+        memoryBytes += out[1]->Malloc(label_dim);
+
+        lock = std::async(std::launch::async,&ImageDataLayer::prefetch,this);
+
+        return memoryBytes;
+    };
+
+    void forward(Phase phase_){
+        lock.wait();
+        epoch = epoch_prefetch;
+
+        std::swap(out[0]->dataGPU,dataGPU);
+        std::swap(out[1]->dataGPU,labelGPU);
+        lock = std::async(std::launch::async,&ImageDataLayer::prefetch,this);
+    };
+};
+#endif
+
+
 class PlaceHolderDataLayer : public DataLayer {
     public:
     std::vector<int> dim;
+    std::string file_mean;
+    StorageT* meanGPU;
 
     int numofitems(){
         return 1;
@@ -3579,6 +4035,7 @@ class PlaceHolderDataLayer : public DataLayer {
         SetOrDie(json, name)
         SetValue(json, phase,       Testing)
         SetOrDie(json, dim)
+        SetValue(json, file_mean,   "")
         init();
     };
     ~PlaceHolderDataLayer(){
@@ -3599,12 +4056,23 @@ class PlaceHolderDataLayer : public DataLayer {
         out[0]->receptive_offset.resize(dim.size()-2); fill_n(out[0]->receptive_offset.begin(),dim.size()-2,0);
         memoryBytes += out[0]->Malloc(dim);
 
+        // mean
+        if(file_mean.empty()){
+            meanGPU = NULL;
+        }else{
+            Tensor<StorageT>* meanCPU = new Tensor<StorageT>(file_mean);
+            meanCPU->print(veci(0));
+            checkCUDA(__LINE__, cudaMalloc(&meanGPU, meanCPU->numBytes()) );
+            memoryBytes += meanCPU->numBytes();
+            meanCPU->writeGPU(meanGPU);
+            delete meanCPU;
+        }
+
         return memoryBytes;
     }
     void shuffle(){};
     void forward(Phase phase_){};
 };
-
 
 template <class T>
 class DiskDataLayer : public DataLayer {
@@ -3720,11 +4188,10 @@ class DiskDataLayer : public DataLayer {
             distribution_uniform[d] = new std::uniform_int_distribution<int>(0,size_data[d+1] - size_crop[d]);
         }
 
+        ordering.resize(numofitems());
+        for (int i=0;i<numofitems();++i) ordering[i]=i;
         if (phase!=Testing){
             shuffle();
-        }else{
-            ordering.resize(numofitems());
-            for (int i=0;i<numofitems();++i) ordering[i]=i;
         }
     };
 
@@ -5351,10 +5818,6 @@ public:
         for (int i=0;i<out.size();++i){
             out[i]->need_diff = in[i*2]->need_diff;
 
-            if (! (in[i*2+1]->dim[0] == in[i*2]->dim[0] && sizeofitem(in[i*2+1]->dim) == shape.size())){
-                std::cout<<std::endl<<"ROILayer in["<<i*2+1<<"]->dim is wrong"<<std::endl; FatalError(__LINE__);
-            }
-
             std::vector<int> dim;
             dim.push_back(in[i*2]->dim[0]);
 
@@ -5587,6 +6050,8 @@ public:
                     }
                 }
             break;
+            case ElementWise_MIN: std::cout<<"Not implemented yet"<<std::endl; FatalError(__LINE__);
+            break;
             case ElementWise_MAX: std::cout<<"Not implemented yet"<<std::endl; FatalError(__LINE__);
             break;
         };
@@ -5609,6 +6074,8 @@ public:
                         CoeffElementWiseSumAccumulate<<<CUDA_GET_BLOCKS(N),CUDA_NUM_THREADS>>>(CUDA_GET_LOOPS(N), N, coeff[ii], coeff_data, ii * items, dim, out[j]->diffGPU, in[i]->diffGPU);
                     }
                 }
+            break;
+            case ElementWise_MIN: std::cout<<"Not implemented yet"<<std::endl; FatalError(__LINE__);
             break;
             case ElementWise_MAX: std::cout<<"Not implemented yet"<<std::endl; FatalError(__LINE__);
             break;
@@ -6819,7 +7286,7 @@ public:
                     bnScaleBiasMeanVarDesc,
                     weight_dataGPU,
                     bias_dataGPU,
-                    1 / (1 + numForwardTrainingPasses),
+                    1. / (1 + numForwardTrainingPasses),
                     resultRunningMean + weight_index,
                     resultRunningInvVariance + bias_index,
                     epsilon,
@@ -6990,6 +7457,9 @@ public:
                 else if (fpTypeid==typeID(typeid(char)))        pLayer = new DiskDataLayer<char>(p);
                 else if (fpTypeid==typeID(typeid(bool)))        pLayer = new DiskDataLayer<bool>(p);
             }
+#if USE_OPENCV
+            else if (0==type.compare("ImageData"))              pLayer = new ImageDataLayer(p);
+#endif            
             else if (0==type.compare("ElementWise"))            pLayer = new ElementWiseLayer(p);
             else if (0==type.compare("Concat"))                 pLayer = new ConcatLayer(p);
             else if (0==type.compare("Convolution"))            pLayer = new ConvolutionLayer(p);
@@ -7004,6 +7474,7 @@ public:
             else if (0==type.compare("ROI"))                    pLayer = new ROILayer(p);
             else if (0==type.compare("ROIPooling"))             pLayer = new ROIPoolingLayer(p);
             else if (0==type.compare("Tensor"))                 pLayer = new TensorLayer(p);
+            else if (0==type.compare("Constant"))               pLayer = new ConstantLayer(p);
             else if (0==type.compare("PlaceHolderData"))        pLayer = new PlaceHolderDataLayer(p);
             else if (0==type.compare("LSTM"))                   pLayer = new LSTMLayer(p);
             else if (0==type.compare("SequenceGeneration"))    {pLayer = new SequenceGenerationLayer(p); sequence_layers.push_back((SequenceGenerationLayer*)pLayer);   }
@@ -7184,7 +7655,7 @@ public:
 
                 layers[l]->forward(phase);
 
-                if (debug_mode){ // || l==38){
+                if (debug_mode){
                     checkCUDA(__LINE__,cudaDeviceSynchronize()); checkCUDA(__LINE__,cudaGetLastError());
                     if (layers[l]->out.size()>0){
                         for (size_t o=0; o<layers[l]->out.size();++o){
@@ -8066,3 +8537,5 @@ public:
 };
 
 }  // namespace marvin
+
+#endif
