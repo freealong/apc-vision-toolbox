@@ -116,12 +116,13 @@ bool srv_save(marvin_convnet::DetectObjects::Request  &req,
   color_frame = color_frame.reshape(3, frame_height);
   cv::cvtColor(color_frame, color_frame, CV_RGB2BGR);
   cv::imwrite(write_directory + color_frame_filename, color_frame);
-  cloud_buffer_rgb = color_frame.data;
+//  cloud_buffer_rgb = color_frame.data;
 
   // Save depth frame (aligned and un-aligned raw)
   WriteDepth(write_directory + depth_frame_filename, buffer_depth, frame_height, frame_width); 
   WriteDepth(write_directory + raw_depth_frame_filename, buffer_raw_depth, frame_height, frame_width);
 
+  std::cout << "save data successfully" << std::endl;
 
   return true;
 }

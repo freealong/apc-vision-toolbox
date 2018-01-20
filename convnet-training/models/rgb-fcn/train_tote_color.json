@@ -17,20 +17,20 @@
 			"test_iter": 10,
 			"test_interval": 100,
 			"debug_mode": false,
-			"GPU_solver": 4,
-			"GPU": [4]
+			"GPU_solver": 0,
+			"GPU": [0]
 		},
 	"test":
 		{
 			"debug_mode": false,
-			"GPU": 4
+			"GPU": 0
 		},
 	"layers":[
 		{
 			"type": "APCData",
 			"name": "dataTrain",
 			"phase": "Training",
-			"file_data": ["/n/fs/sun3d/apc/data/training/tote"],
+			"file_data": ["/home/yongqi/projects/apc-vision-toolbox/data/training/tote"],
 			"batch_size": 9,
 			"random": true,
 			"out": ["data_RGB","data_HHA","label"]
@@ -39,7 +39,7 @@
 			"type": "APCData",
 			"name": "dataTest",
 			"phase": "Testing",
-			"file_data": ["/n/fs/sun3d/apc/data/training/tote"],
+			"file_data": ["/home/yongqi/projects/apc-vision-toolbox/data/training/tote"],
 			"batch_size": 9,
 			"random": true,
 			"out": ["data_RGB","data_HHA","label"]

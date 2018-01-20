@@ -20,8 +20,8 @@ find_package(OpenCV REQUIRED)
 find_package(CUDA REQUIRED)
 set(CUDA_HOST_COMPILER "c++")
 set(CUDA_NVCC_FLAGS "-std=c++11")
-set(CUDNN_INCLUDE_DIR /usr/local/cudnn/v5/include CACHE PATH "Path to cudnn header file")
-set(CUDNN_LIB_DIR /usr/local/cudnn/v5/lib64)
+set(CUDNN_INCLUDE_DIR /usr/local/cuda/include CACHE PATH "Path to cudnn header file")
+set(CUDNN_LIB_DIR /usr/local/cuda/lib64)
 
 ## Uncomment this IF the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -53,10 +53,10 @@ set(CUDNN_LIB_DIR /usr/local/cudnn/v5/lib64)
 ##   * add every package in MSG_DEP_SET to generate_messages(DEPENDENCIES ...)
 
 ## Generate messages in the 'msg' folder
-add_message_files(
-  FILES
-  # ObjectHypothesis.msg
-)
+#add_message_files(
+#  FILES
+#  # ObjectHypothesis.msg
+#)
 
 ## Generate services in the 'srv' folder
 add_service_files(
